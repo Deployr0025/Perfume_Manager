@@ -14,75 +14,77 @@ def get_db_connection():
     return conn
 
 def init_db():
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.executescript('''
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                username TEXT UNIQUE NOT NULL,
-                password TEXT NOT NULL,
-                role TEXT CHECK(role IN ("Owner", "Employee")) NOT NULL
-            );
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.executescript('''
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    username TEXT UNIQUE NOT NULL,
+                    password TEXT NOT NULL,
+                    role TEXT CHECK(role IN ('Owner', 'Employee')) NOT NULL
+                );
 
-            CREATE TABLE IF NOT EXISTS inventory (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                item_name TEXT NOT NULL,
-                details TEXT, -- New column for extra item details
-                quantity INTEGER NOT NULL,
-                category TEXT,
-                assigned_to INTEGER,
-                status TEXT CHECK(status IN ('In Stock', 'Out of Stock', 'Issued', 'Remaining', 'Returned', 'Wasted')),
-                date TEXT,
-                FOREIGN KEY(assigned_to) REFERENCES users(id)
-            );
+                CREATE TABLE IF NOT EXISTS inventory (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    item_name TEXT NOT NULL,
+                    quantity INTEGER NOT NULL,
+                    category TEXT,
+                    assigned_to INTEGER,
+                    status TEXT CHECK(status IN ('In Stock', 'Out of Stock', 'Issued', 'Remaining', 'Returned', 'Wasted')),
+                    date TEXT,
+                    FOREIGN KEY(assigned_to) REFERENCES users(id)
+                );
 
-            CREATE TABLE IF NOT EXISTS sales (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                employee_id INTEGER,
-                item_sold TEXT,
-                quantity INTEGER,
-                amount REAL,
-                date TEXT,
-                description TEXT,
-                FOREIGN KEY(employee_id) REFERENCES users(id)
-            );
 
-            CREATE TABLE IF NOT EXISTS expenses (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                employee_id INTEGER,
-                expense_type TEXT CHECK(expense_type IN ("General", "Work")),
-                amount REAL,
-                date TEXT,
-                description TEXT,
-                FOREIGN KEY(employee_id) REFERENCES users(id)
-            );
+                CREATE TABLE IF NOT EXISTS sales (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    employee_id INTEGER,
+                    item_sold TEXT,
+                    quantity INTEGER,
+                    amount REAL,
+                    date TEXT,
+                    description TEXT,
+                    FOREIGN KEY(employee_id) REFERENCES users(id)
+                );
 
-            CREATE TABLE IF NOT EXISTS assigned_inventory (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                employee_id INTEGER,
-                item_id INTEGER,
-                item_name TEXT NOT NULL, -- New column to store item name
-                details TEXT, -- New column to store item details
-                quantity INTEGER NOT NULL,
-                date TEXT DEFAULT CURRENT_DATE,
-                FOREIGN KEY(employee_id) REFERENCES users(id),
-                FOREIGN KEY(item_id) REFERENCES inventory(id)
-            );
+                CREATE TABLE IF NOT EXISTS expenses (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    employee_id INTEGER,
+                    expense_type TEXT CHECK(expense_type IN ('General', 'Work')),
+                    amount REAL,
+                    date TEXT,
+                    description TEXT,
+                    FOREIGN KEY(employee_id) REFERENCES users(id)
+                );
 
-            CREATE TRIGGER IF NOT EXISTS update_inventory_status
-            AFTER UPDATE OF quantity ON inventory
-            BEGIN
-                UPDATE inventory 
-                SET status = CASE 
-                    WHEN NEW.quantity > 0 THEN 'In Stock'
-                    ELSE 'Out of Stock'
-                END
-                WHERE id = NEW.id;
-            END;
-        ''')
-        conn.commit()
+                CREATE TABLE IF NOT EXISTS assigned_inventory (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    employee_id INTEGER,
+                    item_id INTEGER,
+                    item_name TEXT NOT NULL,
+                    details TEXT,
+                    quantity INTEGER NOT NULL,
+                    date TEXT DEFAULT CURRENT_DATE,
+                    FOREIGN KEY(employee_id) REFERENCES users(id),
+                    FOREIGN KEY(item_id) REFERENCES inventory(id)
+                );
 
+                CREATE TRIGGER IF NOT EXISTS update_inventory_status
+                AFTER UPDATE OF quantity ON inventory
+                BEGIN
+                    UPDATE inventory 
+                    SET status = CASE 
+                        WHEN NEW.quantity > 0 THEN 'In Stock'
+                        ELSE 'Out of Stock'
+                    END
+                    WHERE id = NEW.id;
+                END;
+            ''')
+            conn.commit()
+    except Exception as e:
+        print(f"Database initialization failed: {e}")
 
 @app.route("/")
 def index():
@@ -245,24 +247,28 @@ def owner_dashboard():
         """)
         employee_finances = cursor.fetchall()
 
-        # Fetch assigned inventory details per employee
+        # Fetch assigned inventory details per employee with item names
         cursor.execute("""
-            SELECT assigned_inventory.employee_id, 
-                   COUNT(assigned_inventory.item_id) AS assigned_items 
+            SELECT assigned_inventory.employee_id,
+                   GROUP_CONCAT(assigned_inventory.item_name || ' (' || assigned_inventory.quantity || ')') as assigned_items,
+                   COUNT(assigned_inventory.item_id) AS total_items
             FROM assigned_inventory
             GROUP BY assigned_inventory.employee_id
         """)
-        assigned_inventory = {row[0]: row[1] for row in cursor.fetchall()}  # Convert to dict (employee_id -> item count)
+        assigned_inventory = {row[0]: {'items': row[1], 'count': row[2]} for row in cursor.fetchall()}
 
         # Process employees for overview
         employees = []
         for row in employee_finances:
+            employee_id = row[0]
+            assigned_info = assigned_inventory.get(employee_id, {'items': '', 'count': 0})
             employees.append({
-                "id": row[0],       # Employee ID
-                "name": row[1],     # Employee Name
-                "expense": row[2],  # Total Expenses
-                "sales": row[3],    # Total Sales
-                "assigned_inventory": assigned_inventory.get(row[0], 0)  # Get assigned inventory count
+                "id": employee_id,
+                "name": row[1],
+                "expense": row[2],
+                "sales": row[3],
+                "assigned_items": assigned_info['items'] or "No items assigned",
+                "assigned_count": assigned_info['count']
             })
 
         # Fetch sales data for graph (last 7 days)
@@ -276,18 +282,15 @@ def owner_dashboard():
         sales_data = cursor.fetchall()
 
         # Process sales data for Chart.js
-        labels = [row[0] for row in sales_data]  # Extracting dates
-        data = [row[1] for row in sales_data]    # Extracting sales amounts
+        labels = [row[0] for row in sales_data]
+        data = [row[1] for row in sales_data]
 
     return render_template("owner_dashboard.html",
-                           labels=labels if labels else [],
-                           data=data if data else [],
-                           total_items=total_items,
-                           inventory=inventory,
-                           employees=employees)
-
-
-
+                         labels=labels if labels else [],
+                         data=data if data else [],
+                         total_items=total_items,
+                         inventory=inventory,
+                         employees=employees)
 
 @app.route("/employee/dashboard", methods=["GET", "POST"])
 def employee_dashboard():
@@ -490,21 +493,31 @@ def assign_inventory():
     with get_db_connection() as conn:
         cursor = conn.cursor()
         
-        # Ensure inventory exists and has enough stock
-        cursor.execute("SELECT quantity FROM inventory WHERE id = ?", (item_id,))
-        current_quantity = cursor.fetchone()[0]
+        # First get the item name from inventory
+        cursor.execute("SELECT item_name, quantity FROM inventory WHERE id = ?", (item_id,))
+        item_data = cursor.fetchone()
+        
+        if not item_data:
+            flash("Item not found!", "error")
+            return redirect(url_for("inventory"))
+            
+        item_name = item_data[0]
+        current_quantity = item_data[1]
 
         if current_quantity < quantity:
             flash("Not enough stock available!", "error")
             return redirect(url_for("inventory"))
 
-        # Deduct from main stock and assign to employee
+        # Deduct from main stock
         new_quantity = current_quantity - quantity
         cursor.execute("UPDATE inventory SET quantity = ? WHERE id = ?", (new_quantity, item_id))
         
-        # Assign inventory to employee
-        cursor.execute("INSERT INTO assigned_inventory (employee_id, item_id, quantity, date) VALUES (?, ?, ?, DATE('now'))",
-                       (employee_id, item_id, quantity))
+        # Assign inventory to employee with item_name
+        cursor.execute("""
+            INSERT INTO assigned_inventory 
+            (employee_id, item_id, item_name, quantity, date) 
+            VALUES (?, ?, ?, ?, DATE('now'))
+        """, (employee_id, item_id, item_name, quantity))
         
         conn.commit()
     return '<script>alert("Inventory Assigned Successfully!"); window.close();</script>'
