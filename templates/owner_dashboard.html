@@ -81,15 +81,15 @@
             </div>
 
 
-            <!-- Employee Overview (Placed Further Below Inventory) -->
-            <div class="card table-card" style="margin-top: 40px;"> <!-- Added margin for spacing -->
+            <!-- Employee Overview Table -->
+            <div class="card table-card" style="margin-top: 40px;">
                 <h3>Employee Overview</h3>
                 <div class="table-container">
                     <table>
                         <thead>
                             <tr>
                                 <th>Employee Name</th>
-                                <th>Assigned Inventory</th>
+                                <th>Assigned Items</th>
                                 <th>Expenses</th>
                                 <th>Sales</th>
                             </tr>
@@ -98,16 +98,21 @@
                             {% for employee in employees %}
                             <tr>
                                 <td>{{ employee.name }}</td>
-                                <td>{{ employee.assigned_inventory }}</td>
-                                <td>Rs{{ employee.expense }}</td>
-                                <td>Rs{{ employee.sales }}</td>
+                                <td>
+                                    {% if employee.assigned_items %}
+                                        {{ employee.assigned_items }}
+                                    {% else %}
+                                        No items assigned
+                                    {% endif %}
+                                </td>
+                                <td>Rs{{ "%.2f"|format(employee.expense) }}</td>
+                                <td>Rs{{ "%.2f"|format(employee.sales) }}</td>
                             </tr>
                             {% endfor %}
                         </tbody>
                     </table>
                 </div>
             </div>
-
 
             <!-- Hamburger Menu -->
             <div class="hamburger-container">
